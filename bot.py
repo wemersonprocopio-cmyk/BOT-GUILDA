@@ -307,6 +307,26 @@ def main():
 
     print("🤖 Bot rodando...")
     app.run_polling()
+# ---------------------------------------------------
+# Rota HTTP mínima para Uptime Robot
+# ---------------------------------------------------
+from flask import Flask
+import threading
 
+app_http = Flask("")
+
+@app_http.route("/")
+def home():
+    return "Bot está online!"
+
+# Rodar o Flask em thread separada para não bloquear o bot
+threading.Thread(target=lambda: app_http.run(host="0.0.0.0", port=8000)).start()
+
+# ---------------------------------------------------
+# Rodar o bot normalmente
+# ---------------------------------------------------
+if __name__ == "__main__":
+    main()  # sua função que inicia o app.run_polling()
 if __name__=="__main__":
+
     main()
