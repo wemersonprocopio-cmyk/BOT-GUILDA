@@ -1,4 +1,6 @@
 import json
+import os
+import threading
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,14 +11,15 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from flask import Flask
 
-import os
-TOKEN = os.getenv("TOKEN")
+# ----------------------------- CONSTANTES -----------------------------
+ESCOLHER_PERSONAGEM, ESCOLHER_CAMPO, EDITANDO, SUBMENU_MOEDAS = range(4)
 
-# Estados da conversa
-ESCOLHER_PERSONAGEM, ESCOLHER_CAMPO, EDITANDO, NOME_JOGADOR, NOME_NOVA_FICHA, ESCOLHER_TIPO_MOEDA, EDITAR_MOEDA, INVENTARIO_SUBMENU = range(8)
+RANK_HIERARQUIA = ["Deus", "Lendario", "sss", "ss", "s", "A", "Bc", "d", "e"]
+MOEDAS_NOMES = {"pc": "Cobre", "pp": "Prata", "pe": "Electro", "po": "Ouro", "pl": "Platina", "md": "Moedas do Destino"}
 
-# ------------------- Funções de dados -------------------
+# ----------------------------- FUNÇÕES DE ARQUIVO -----------------------------
 def carregar_fichas():
     try:
         with open("fichas.json", "r", encoding="utf-8") as f:
@@ -28,64 +31,27 @@ def salvar_fichas(dados):
     with open("fichas.json", "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
 
-# ------------------- Teclados -------------------
-def teclado_campos():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Nome do Jogador", callback_data="campo_jogador")],
-        [InlineKeyboardButton("Nome do personagem", callback_data="campo_nome")],
-        [InlineKeyboardButton("Nível", callback_data="campo_nivel")],
-        [InlineKeyboardButton("Rank", callback_data="campo_rank")],
-        [InlineKeyboardButton("Raça", callback_data="campo_raca")],
-        [InlineKeyboardButton("Classe", callback_data="campo_classe")],
-        [InlineKeyboardButton("História", callback_data="campo_historia")],
-        [InlineKeyboardButton("Desvantagem", callback_data="campo_desvantagem")],
-        [InlineKeyboardButton("Antecedentes", callback_data="campo_antecedentes")],
-        [InlineKeyboardButton("Inventário", callback_data="campo_inventario")],
-        [InlineKeyboardButton("🔚 Encerrar edição", callback_data="encerrar")],
-    ])
-
-def teclado_inventario():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Equipamentos", callback_data="inv_equipamentos")],
-        [InlineKeyboardButton("Moedas", callback_data="inv_moedas")],
-        [InlineKeyboardButton("🔙 Voltar", callback_data="voltar_inventario")],
-    ])
-
-def teclado_moedas():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Cobre (pc)", callback_data="moeda_pc")],
-        [InlineKeyboardButton("Prata (pp)", callback_data="moeda_pp")],
-        [InlineKeyboardButton("Electro (pe)", callback_data="moeda_pe")],
-        [InlineKeyboardButton("Ouro (po)", callback_data="moeda_po")],
-        [InlineKeyboardButton("Platina (pl)", callback_data="moeda_pl")],
-        [InlineKeyboardButton("Moedas do Destino (md)", callback_data="moeda_md")],
-        [InlineKeyboardButton("🔙 Voltar", callback_data="voltar_moedas")],
-    ])
-
-# ------------------- CRIAR FICHA -------------------
-async def criar_ficha_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📝 Qual é o nome do jogador/dono desta ficha?")
-    return NOME_JOGADOR
-
-async def receber_nome_jogador(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["novo_jogador"] = update.message.text.strip()
-    await update.message.reply_text("📝 Qual será o nome do personagem?")
-    return NOME_NOVA_FICHA
-
-async def receber_nome_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ----------------------------- COMANDOS BOT -----------------------------
+async def criar_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
-    nome_personagem = update.message.text.strip()
-    jogador = context.user_data.get("novo_jogador", "Desconhecido")
     dados = carregar_fichas()
     if user_id not in dados:
         dados[user_id] = {}
-    if nome_personagem in dados[user_id]:
-        await update.message.reply_text("❌ Já existe um personagem com esse nome!")
+
+    await update.message.reply_text("✏️ Envie o nome do novo personagem:")
+    return ESCOLHER_PERSONAGEM
+
+async def receber_nome_personagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = "admin"
+    nome = update.message.text.strip()
+    dados = carregar_fichas()
+    if nome in dados.get(user_id, {}):
+        await update.message.reply_text("❌ Personagem já existe. Use outro nome.")
         return ConversationHandler.END
 
-    dados[user_id][nome_personagem] = {
-        "jogador": jogador,
-        "nome": nome_personagem,
+    dados[user_id][nome] = {
+        "nome": nome,
+        "jogador": user_id,
         "nivel": "",
         "rank": "",
         "raca": "",
@@ -93,10 +59,10 @@ async def receber_nome_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "historia": "",
         "desvantagem": "",
         "antecedentes": "",
-        "inventario": {"equipamentos": "", "moedas": {"pc":"0","pp":"0","pe":"0","po":"0","pl":"0","md":"0"}}
+        "inventario": {"equipamentos": [], "moedas": {"pc":0,"pp":0,"pe":0,"po":0,"pl":0,"md":0}}
     }
     salvar_fichas(dados)
-    await update.message.reply_text(f"✅ Ficha de '{nome_personagem}' criada com sucesso!")
+    await update.message.reply_text(f"✅ Personagem {nome} criado com sucesso!")
     return ConversationHandler.END
 
 # ------------------- EDITAR FICHA -------------------
@@ -104,10 +70,11 @@ async def editar_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
     dados = carregar_fichas()
     if user_id not in dados or not dados[user_id]:
-        await update.message.reply_text("❌ Nenhuma ficha cadastrada.")
+        await update.message.reply_text("❌ Nenhum personagem cadastrado.")
         return ConversationHandler.END
-    keyboard = [[InlineKeyboardButton(nome, callback_data=f"personagem_{nome}")] for nome in dados[user_id]]
-    await update.message.reply_text("🎭 Escolha o personagem para editar:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    keyboard = [[InlineKeyboardButton(n, callback_data=f"personagem_{n}")] for n in dados[user_id]]
+    await update.message.reply_text("🎭 Escolha o personagem:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ESCOLHER_PERSONAGEM
 
 async def escolher_personagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,7 +82,21 @@ async def escolher_personagem(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     personagem = query.data.replace("personagem_", "")
     context.user_data["personagem"] = personagem
-    await query.edit_message_text(f"✏️ Editando {personagem}\n\nEscolha o campo:", reply_markup=teclado_campos())
+
+    keyboard = [
+        [InlineKeyboardButton("Nome", callback_data="campo_nome")],
+        [InlineKeyboardButton("Jogador", callback_data="campo_jogador")],
+        [InlineKeyboardButton("Nivel", callback_data="campo_nivel")],
+        [InlineKeyboardButton("Rank", callback_data="campo_rank")],
+        [InlineKeyboardButton("Raça", callback_data="campo_raca")],
+        [InlineKeyboardButton("Classe", callback_data="campo_classe")],
+        [InlineKeyboardButton("História", callback_data="campo_historia")],
+        [InlineKeyboardButton("Desvantagem", callback_data="campo_desvantagem")],
+        [InlineKeyboardButton("Antecedentes", callback_data="campo_antecedentes")],
+        [InlineKeyboardButton("Inventário", callback_data="campo_inventario")],
+        [InlineKeyboardButton("🔚 Encerrar edição", callback_data="encerrar")]
+    ]
+    await query.edit_message_text(f"✏️ Editando {personagem}\nEscolha o campo:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ESCOLHER_CAMPO
 
 async def escolher_campo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,94 +106,82 @@ async def escolher_campo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Edição encerrada.")
         return ConversationHandler.END
 
-    if query.data == "campo_inventario":
-        await query.edit_message_text("📦 Inventário - escolha o subitem:", reply_markup=teclado_inventario())
-        return INVENTARIO_SUBMENU
-
     campo = query.data.replace("campo_", "")
     context.user_data["campo"] = campo
-    await query.edit_message_text(f"✏️ Envie o novo valor para {campo}:")
-    return EDITANDO
 
-async def inventario_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "voltar_inventario":
-        await query.edit_message_text(f"✏️ Editando {context.user_data['personagem']}\n\nEscolha o campo:", reply_markup=teclado_campos())
-        return ESCOLHER_CAMPO
-    if query.data == "inv_equipamentos":
-        context.user_data["campo"] = "equipamentos"
-        await query.edit_message_text("✏️ Envie os equipamentos:")
+    if campo == "inventario":
+        keyboard = [
+            [InlineKeyboardButton("Equipamentos", callback_data="equipamentos")],
+            [InlineKeyboardButton("Moedas", callback_data="moedas")],
+            [InlineKeyboardButton("🔙 Voltar", callback_data="voltar")]
+        ]
+        await query.edit_message_text("📦 Escolha a sessão do inventário:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return SUBMENU_MOEDAS
+    else:
+        await query.edit_message_text(f"✏️ Envie o novo valor para {campo}:")
         return EDITANDO
-    if query.data == "inv_moedas":
-        await query.edit_message_text("💰 Escolha a moeda para editar:", reply_markup=teclado_moedas())
-        return ESCOLHER_TIPO_MOEDA
 
-async def escolher_tipo_moeda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def submenu_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "voltar_moedas":
-        await query.edit_message_text("📦 Inventário - escolha o subitem:", reply_markup=teclado_inventario())
-        return INVENTARIO_SUBMENU
-    tipo = query.data.replace("moeda_", "")
-    context.user_data["campo"] = tipo
-    await query.edit_message_text(f"✏️ Envie a quantidade de {tipo.upper()}:")
-    return EDITAR_MOEDA
+    campo = query.data
+    context.user_data["subcampo"] = campo
+    if campo == "voltar":
+        return await escolher_personagem(update, context)
+    elif campo == "moedas":
+        await query.edit_message_text("✏️ Envie o novo valor das moedas no formato: pc pp pe po pl md\nExemplo: 10 5 0 1 0 0")
+        return EDITANDO
+    else:  # equipamentos
+        await query.edit_message_text("✏️ Envie os equipamentos separados por vírgula")
+        return EDITANDO
 
 async def salvar_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
     personagem = context.user_data["personagem"]
     campo = context.user_data["campo"]
     dados = carregar_fichas()
-    if user_id not in dados: dados[user_id] = {}
-    if personagem not in dados[user_id]: dados[user_id][personagem] = {}
 
-    moedas_tipos = ["pc","pp","pe","po","pl","md"]
-    if campo in moedas_tipos:
-        dados[user_id][personagem]["inventario"]["moedas"][campo] = update.message.text
-    elif campo == "equipamentos":
-        dados[user_id][personagem]["inventario"]["equipamentos"] = update.message.text
+    if campo == "moedas" and "subcampo" in context.user_data:
+        try:
+            valores = list(map(int, update.message.text.strip().split()))
+            if len(valores) != 6:
+                raise ValueError
+            dados[user_id][personagem]["inventario"]["moedas"] = dict(zip(MOEDAS_NOMES.keys(), valores))
+        except:
+            await update.message.reply_text("❌ Formato incorreto. Use: pc pp pe po pl md")
+            return EDITANDO
+    elif campo == "equipamentos" and "subcampo" in context.user_data:
+        equipamentos = [e.strip() for e in update.message.text.strip().split(",")]
+        dados[user_id][personagem]["inventario"]["equipamentos"] = equipamentos
     else:
         dados[user_id][personagem][campo] = update.message.text
 
     salvar_fichas(dados)
-    await update.message.reply_text("✅ Campo atualizado!\n\nEscolha outro campo:", reply_markup=teclado_campos())
-    return ESCOLHER_CAMPO
+    await update.message.reply_text("✅ Campo atualizado!")
+    return ConversationHandler.END
 
 # ------------------- VER FICHA -------------------
 async def ver_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
     dados = carregar_fichas()
     if user_id not in dados or not dados[user_id]:
-        await update.message.reply_text("❌ Nenhuma ficha cadastrada.")
+        await update.message.reply_text("❌ Nenhum personagem cadastrado.")
         return
-    keyboard = [[InlineKeyboardButton(nome, callback_data=f"ver_{nome}")] for nome in dados[user_id]]
-    await update.message.reply_text("👀 Clique no personagem para ver toda a ficha:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton(n, callback_data=f"ver_{n}")] for n in dados[user_id]]
+    await update.message.reply_text("🎭 Escolha o personagem para ver:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def mostrar_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    personagem = query.data.replace("ver_", "").strip()
-    user_id = "admin"
+    nome = query.data.replace("ver_", "")
     dados = carregar_fichas()
-    if user_id not in dados or personagem not in dados[user_id]:
-        await query.edit_message_text("❌ Ficha não encontrada.")
-        return
-    f = dados[user_id][personagem]
+    p = dados["admin"][nome]
 
-    texto = f"👤 Jogador: {f.get('jogador','Desconhecido')}\n────────\n"
-    texto += f"🎭 Personagem: {f.get('nome','')}\n────────\n"
-    texto += f"Nível: {f.get('nivel','')}\nRank: {f.get('rank','')}\n────────\n"
-    texto += f"Raça: {f.get('raca','')}\nClasse: {f.get('classe','')}\n────────\n"
-    texto += f"História: {f.get('historia','')}\nDesvantagem: {f.get('desvantagem','')}\nAntecedentes: {f.get('antecedentes','')}\n────────\n"
-    texto += "📦 Inventário:\n"
-    texto += f"- Equipamentos: {f.get('inventario', {}).get('equipamentos','')}\n- Moedas:\n"
-    moedas = f.get("inventario", {}).get("moedas", {})
-    moedas_nomes = {"pc":"Cobre","pp":"Prata","pe":"Electro","po":"Ouro","pl":"Platina","md":"Moedas do Destino"}
-    for chave, valor in moedas.items():
-        nome_moeda = moedas_nomes.get(chave, chave.upper())
-        texto += f"  • {nome_moeda} ({chave}): {valor}\n"
-
+    texto = f"──────────────\n🎭 {p.get('nome','')}\nJogador: {p.get('jogador','')}\nNível: {p.get('nivel','')}\nRank: {p.get('rank','')}\n──────────────\n"
+    texto += f"Raça: {p.get('raca','')}\nClasse: {p.get('classe','')}\nHistória: {p.get('historia','')}\nDesvantagem: {p.get('desvantagem','')}\nAntecedentes: {p.get('antecedentes','')}\n──────────────\n"
+    texto += "Inventário:\nEquipamentos: " + ", ".join(p.get("inventario", {}).get("equipamentos", [])) + "\n"
+    moedas = p.get("inventario", {}).get("moedas", {})
+    texto += "Moedas: " + ", ".join(f"{MOEDAS_NOMES.get(k,k)}:{v}" for k,v in moedas.items()) + "\n──────────────"
     await query.edit_message_text(texto)
 
 # ------------------- DELETAR FICHA -------------------
@@ -220,78 +189,59 @@ async def deletar_ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
     dados = carregar_fichas()
     if user_id not in dados or not dados[user_id]:
-        await update.message.reply_text("❌ Nenhuma ficha cadastrada.")
+        await update.message.reply_text("❌ Nenhum personagem cadastrado.")
         return
-    keyboard = [[InlineKeyboardButton(nome, callback_data=f"del_{nome}")] for nome in dados[user_id]]
-    await update.message.reply_text("⚠️ Clique no personagem que deseja deletar:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton(n, callback_data=f"del_{n}")] for n in dados[user_id]]
+    await update.message.reply_text("⚠️ Escolha o personagem para deletar:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def confirmar_delecao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    personagem = query.data.replace("del_", "").strip()
-    user_id = "admin"
+    nome = query.data.replace("del_", "")
     dados = carregar_fichas()
-    if user_id in dados and personagem in dados[user_id]:
-        del dados[user_id][personagem]
-        salvar_fichas(dados)
-        await query.edit_message_text(f"✅ Ficha '{personagem}' deletada com sucesso!")
-    else:
-        await query.edit_message_text("❌ Ficha não encontrada.")
+    del dados["admin"][nome]
+    salvar_fichas(dados)
+    await query.edit_message_text(f"✅ Personagem {nome} deletado!")
 
 # ------------------- STATUS -------------------
-RANK_HIERARQUIA = ["Deus", "Lendario", "sss", "ss", "s", "A", "Bc", "d", "e"]
-
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = "admin"
     dados = carregar_fichas()
     if user_id not in dados or not dados[user_id]:
         await update.message.reply_text("❌ Nenhuma ficha cadastrada.")
         return
-
     personagens = list(dados[user_id].values())
-
     def rank_index(p):
         try:
             return RANK_HIERARQUIA.index(p.get("rank","e"))
-        except ValueError:
+        except:
             return len(RANK_HIERARQUIA)
-
     personagens.sort(key=lambda x: (rank_index(x), x.get("nome","")))
-
-    texto = "📊 Status dos Personagens\n────────\n"
-    moedas_nomes = {"pc":"Cobre","pp":"Prata","pe":"Electro","po":"Ouro","pl":"Platina","md":"Moedas do Destino"}
-
+    texto = "📊 Status dos Personagens\n──────────────\n"
     for p in personagens:
         texto += f"🎭 {p.get('nome','')} | Rank: {p.get('rank','')}\n"
         moedas = p.get("inventario", {}).get("moedas", {})
-        texto += "💰 Moedas: " + ", ".join(f"{moedas_nomes.get(k,k)}:{v}" for k,v in moedas.items()) + "\n────────\n"
-
+        texto += "💰 Moedas: " + ", ".join(f"{MOEDAS_NOMES.get(k,k)}:{v}" for k,v in moedas.items()) + "\n──────────────\n"
     await update.message.reply_text(texto)
 
-# ------------------- MAIN -------------------
+# ----------------------------- MAIN -----------------------------
 def main():
+    TOKEN = os.getenv("TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # ConversationHandler para criar ficha
+    # Conversas
     conv_criar = ConversationHandler(
-        entry_points=[CommandHandler("novaficha", criar_ficha_start)],
-        states={
-            NOME_JOGADOR:[MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_jogador)],
-            NOME_NOVA_FICHA:[MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_ficha)],
-        },
+        entry_points=[CommandHandler("criarficha", criar_ficha)],
+        states={ESCOLHER_PERSONAGEM:[MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_personagem)]},
         fallbacks=[]
     )
-
-    # ConversationHandler para editar ficha
     conv_editar = ConversationHandler(
         entry_points=[CommandHandler("editarficha", editar_ficha)],
         states={
-            ESCOLHER_PERSONAGEM:[CallbackQueryHandler(escolher_personagem)],
-            ESCOLHER_CAMPO:[CallbackQueryHandler(escolher_campo)],
-            INVENTARIO_SUBMENU:[CallbackQueryHandler(inventario_submenu)],
-            ESCOLHER_TIPO_MOEDA:[CallbackQueryHandler(escolher_tipo_moeda)],
-            EDITAR_MOEDA:[MessageHandler(filters.TEXT & ~filters.COMMAND, salvar_edicao)],
-            EDITANDO:[MessageHandler(filters.TEXT & ~filters.COMMAND, salvar_edicao)],
+            ESCOLHER_PERSONAGEM: [CallbackQueryHandler(escolher_personagem)],
+            ESCOLHER_CAMPO: [CallbackQueryHandler(escolher_campo)],
+            SUBMENU_MOEDAS: [CallbackQueryHandler(submenu_moedas)],
+            EDITANDO: [MessageHandler(filters.TEXT & ~filters.COMMAND, salvar_edicao)],
         },
         fallbacks=[]
     )
@@ -303,30 +253,20 @@ def main():
     app.add_handler(CallbackQueryHandler(mostrar_ficha, pattern=r"^ver_"))
     app.add_handler(CommandHandler("deletarficha", deletar_ficha))
     app.add_handler(CallbackQueryHandler(confirmar_delecao, pattern=r"^del_"))
-    app.add_handler(CommandHandler("Status", status))  # <-- comando Status
+    app.add_handler(CommandHandler("status", status))
 
     print("🤖 Bot rodando...")
     app.run_polling()
-# ---------------------------------------------------
-# Rota HTTP mínima para Uptime Robot
-# ---------------------------------------------------
-from flask import Flask
-import threading
 
+# ------------------- FLASK PARA UPTIME ROBOT -------------------
 app_http = Flask("")
 
 @app_http.route("/")
 def home():
     return "Bot está online!"
 
-# Rodar o Flask em thread separada para não bloquear o bot
 threading.Thread(target=lambda: app_http.run(host="0.0.0.0", port=8000)).start()
 
-# ---------------------------------------------------
-# Rodar o bot normalmente
-# ---------------------------------------------------
+# ------------------- INICIAR BOT -------------------
 if __name__ == "__main__":
-    main()  # sua função que inicia o app.run_polling()
-if __name__=="__main__":
-
     main()
