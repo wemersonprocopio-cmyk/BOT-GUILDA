@@ -1,0 +1,70 @@
+{
+    "admin": {
+        "Cleiton": {
+            "jogador": "Borges",
+            "nome": "Cleiton",
+            "nivel": "2",
+            "rank": "ss",
+            "raca": "",
+            "classe": "",
+            "historia": "",
+            "desvantagem": "",
+            "antecedentes": "",
+            "inventario": {
+                "equipamentos": "",
+                "moedas": {
+                    "pc": "0",
+                    "pp": "0",
+                    "pe": "0",
+                    "po": "0",
+                    "pl": "0",
+                    "md": "0"
+                }
+            }
+        },
+        "Shinigami": {
+            "jogador": "Wemerson",
+            "nome": "Shinigami",
+            "nivel": "",
+            "rank": "E",
+            "raca": "",
+            "classe": "",
+            "historia": "",
+            "desvantagem": "",
+            "antecedentes": "",
+            "inventario": {
+                "equipamentos": "",
+                "moedas": {
+                    "pc": "0",
+                    "pp": "0",
+                    "pe": "0",
+                    "po": "0",
+                    "pl": "0",
+                    "md": "0"
+                }
+            }
+        },
+        "Pedrao": {
+            "jogador": "Marcos",
+            "nome": "Pedrao",
+            "nivel": "",
+            "rank": "A",
+            "raca": "",
+            "classe": "",
+            "historia": "",
+            "desvantagem": "",
+            "antecedentes": "",
+            "inventario": {
+                "equipamentos": "",
+                "moedas": {
+                    "pc": "0",
+                    "pp": "0",
+                    "pe": "0",
+                    "po": "0",
+                    "pl": "0",
+                    "md": "0"
+                }
+            }
+        }
+    }
+}
